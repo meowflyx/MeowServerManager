@@ -159,7 +159,7 @@ msm side unset lithostitched
 Если хочешь более строгую фильтрацию, включи `exclude_server_only = true` и/или
 заполни `server_only` в `[sync]`.
 
-## О局限ениях
+## Стоит помнить
 
 - CurseForge Core API требует ключ. Без него работает только Modrinth.
 - Авто-определение стороны берётся из метаданных Modrinth/CurseForge. Иногда
