@@ -1,0 +1,27 @@
+[active]
+profile = "default"
+
+[profiles.default]
+# Paths are relative to this config file (the MSM/ directory).
+mods_dir = "../mods"
+client_mods_dir = "../client_mods"
+loader = "neoforge"
+game_version = "1.21.1"
+run_script = "./run.sh"
+server_dir = ".."
+
+[apis]
+curseforge_api_key = ""
+
+[modrinth]
+user_agent = "MeowServerManager/1.0.0"
+
+[download]
+concurrent_downloads = 5
+auto_resolve_deps = true
+
+[sync]
+exclude_server_only = false
+server_only = []
+
+[side_overrides]
