@@ -720,27 +720,27 @@ def sync_clients(ctx: click.Context, dry_run: bool) -> None:
 
     client_dir.mkdir(parents=True, exist_ok=True)
     copied = 0
-    skipped = 0
+    sync_skipped = 0
 
     for entry in client_mods:
         src = mods_dir / entry.filename
         dst = client_dir / entry.filename
         if not src.is_file():
             click.echo(f"  SKIP: source not found: {entry.filename}")
-            skipped += 1
+            sync_skipped += 1
             continue
         if dst.is_file():
             src_hash, _ = hash_file(src)
             dst_hash, _ = hash_file(dst)
             if src_hash == dst_hash:
                 click.echo(f"  IDENTICAL: {entry.filename}")
-                skipped += 1
+                sync_skipped += 1
                 continue
         shutil.copy2(src, dst)
         click.echo(f"  COPY: {entry.filename}")
         copied += 1
 
-    click.echo(f"\nCopied: {copied}, Skipped: {skipped}")
+    click.echo(f"\nCopied: {copied}, Skipped: {sync_skipped}")
 
 
 if __name__ == "__main__":

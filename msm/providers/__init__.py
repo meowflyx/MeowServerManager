@@ -61,6 +61,8 @@ class DownloadTarget:
     side: Side
     project_name: str
     size: int
+    sha1: str = ""
+    sha512: str = ""
 
 
 def _map_modrinth_project(p: ModrinthProject) -> UnifiedMod:

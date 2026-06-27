@@ -1,5 +1,11 @@
 """Dependency resolver — resolves mod dependencies recursively,
-filtering by loader (neoforge/forge/fabric) and game version."""
+filtering by loader (neoforge/forge/fabric) and game version.
+
+Both Modrinth and CurseForge resolvers walk the full dependency tree
+(direct + transitive) using a BFS queue guarded by a visited set, so
+cycles are impossible and every reachable required dependency is
+collected exactly once.
+"""
 
 from __future__ import annotations
 
@@ -17,10 +23,33 @@ RELATION_EMBEDDED = 6  # noqa: E221
 
 
 def _loader_filter(loader: str) -> str:
+    """Normalize loader names accepted by the Modrinth API."""
     normalized = loader.lower()
     if normalized in ("neoforge", "neo"):
         return "neoforge"
     return normalized
+
+
+def _resolve_modrinth_project_id(client: ModrinthClient, dep: ModrinthDependency) -> str | None:
+    """Recover a project_id for a dependency that only carries a version_id.
+
+    Modrinth occasionally omits ``project_id`` on dependencies pointing at
+    unlisted or removed projects. Feeding the version_id into the
+    ``/project/{id|slug}/version`` endpoint silently 404s and drops the
+    whole sub-tree, so we fetch the version first and read its project_id.
+    """
+    if dep.project_id:
+        return dep.project_id
+    if not dep.version_id:
+        return None
+    try:
+        ref = client.get_version(dep.version_id)
+    except Exception:
+        logger.warning(
+            "Could not resolve project_id from version %s", dep.version_id, exc_info=True
+        )
+        return None
+    return ref.project_id
 
 
 def resolve_dependencies_modrinth(
@@ -30,32 +59,36 @@ def resolve_dependencies_modrinth(
     loader: str,
     visited: set[str] | None = None,
 ) -> list[tuple[str, str]]:
-    """Resolve Modrinth dependencies recursively.
+    """Resolve Modrinth dependencies recursively (direct + transitive).
 
-    Returns list of (project_id, version_id).
+    Returns a de-duplicated list of (project_id, version_id) tuples in
+    BFS order. Each project is resolved at most once.
     """
     if visited is None:
         visited = set()
 
     resolved: list[tuple[str, str]] = []
-    queue: deque[ModrinthDependency] = deque()
+    queue: deque[tuple[ModrinthDependency, int]] = deque()
 
     for dep in version.dependencies:
         if dep.dependency_type in ("required",):
-            queue.append(dep)
+            queue.append((dep, 1))
 
     target_loader = _loader_filter(loader)
 
     while queue:
-        dep = queue.popleft()
-        dep_project_id = dep.project_id or dep.version_id
+        dep, depth = queue.popleft()
+
+        dep_project_id = _resolve_modrinth_project_id(client, dep)
         if not dep_project_id:
+            logger.warning("Skipping dep without project_id/version_id (depth %d)", depth)
             continue
         if dep_project_id in visited:
             continue
         visited.add(dep_project_id)
 
-        logger.debug("Resolving dep %s", dep_project_id)
+        label = "direct" if depth == 1 else "transitive"
+        logger.info("Resolving %s dep %s (depth %d)", label, dep_project_id, depth)
 
         try:
             dep_versions = client.get_project_versions(
@@ -67,14 +100,19 @@ def resolve_dependencies_modrinth(
             logger.warning("Failed to fetch versions for dep %s", dep_project_id, exc_info=True)
             continue
 
-        compatible = [
+        strict = [
             v for v in dep_versions
             if target_loader in v.loaders and game_version in v.game_versions
         ]
-        if not compatible:
+        if strict:
+            compatible = strict
+        elif dep_versions:
+            logger.warning(
+                "Dep %s: no exact %s/%s match, falling back to closest available",
+                dep_project_id, target_loader, game_version,
+            )
             compatible = dep_versions
-
-        if not compatible:
+        else:
             logger.warning("No compatible version found for dep %s", dep_project_id)
             continue
 
@@ -83,8 +121,9 @@ def resolve_dependencies_modrinth(
 
         for sub_dep in best.dependencies:
             if sub_dep.dependency_type in ("required",):
-                queue.append(sub_dep)
+                queue.append((sub_dep, depth + 1))
 
+    logger.info("Modrinth dependency resolution: %d mods (incl. transitive)", len(resolved))
     return resolved
 
 
@@ -95,27 +134,29 @@ def resolve_dependencies_curseforge(
     loader: str,
     visited: set[int] | None = None,
 ) -> list[tuple[int, int | None]]:
-    """Resolve CurseForge dependencies recursively.
+    """Resolve CurseForge dependencies recursively (direct + transitive).
 
-    Returns list of (mod_id, file_id or None).
+    Returns a de-duplicated list of (mod_id, file_id or None) tuples in
+    BFS order. Each mod is resolved at most once.
     """
     if visited is None:
         visited = set()
 
     resolved: list[tuple[int, int | None]] = []
-    queue: deque[CurseForgeFileDependency] = deque()
+    queue: deque[tuple[CurseForgeFileDependency, int]] = deque()
 
     for dep in cf_file.dependencies:
         if dep.relation_type == RELATION_REQUIRED:
-            queue.append(dep)
+            queue.append((dep, 1))
 
     while queue:
-        dep = queue.popleft()
+        dep, depth = queue.popleft()
         if dep.mod_id in visited:
             continue
         visited.add(dep.mod_id)
 
-        logger.debug("Resolving CF dep mod_id=%d", dep.mod_id)
+        label = "direct" if depth == 1 else "transitive"
+        logger.info("Resolving %s CF dep mod_id=%d (depth %d)", label, dep.mod_id, depth)
 
         try:
             dep_files, _ = client.get_mod_files(
@@ -136,6 +177,7 @@ def resolve_dependencies_curseforge(
 
         for sub_dep in best.dependencies:
             if sub_dep.relation_type == RELATION_REQUIRED:
-                queue.append(sub_dep)
+                queue.append((sub_dep, depth + 1))
 
+    logger.info("CurseForge dependency resolution: %d mods (incl. transitive)", len(resolved))
     return resolved
